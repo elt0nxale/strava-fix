@@ -1,0 +1,17 @@
+{
+  "name": "activityfix",
+  "version": "1.0.0",
+  "description": "Auto-fix Garmin walks wrongly posted as Runs on Strava",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^4.87.0"
+  },
+  "dependencies": {
+    "nvm": "^0.0.4"
+  }
+}
