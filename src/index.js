@@ -58,6 +58,16 @@ async function getLog(kv) {
   return (await kv.get('activity_log', 'json')) ?? [];
 }
 
+async function getWalkCount(kv) {
+  return parseInt((await kv.get('walk_count')) ?? '0');
+}
+
+async function incrementWalkCount(kv) {
+  const next = (await getWalkCount(kv)) + 1;
+  await kv.put('walk_count', String(next));
+  return next;
+}
+
 async function appendLog(kv, entry) {
   const log = await getLog(kv);
   log.unshift(entry);
@@ -132,11 +142,27 @@ async function handleWebhookPost(request, env) {
   const fix = shouldFix(activity, settings);
   if (!fix) return json({ ok: true, skipped: 'no fix needed' });
 
-  await updateActivity(token, activityId, { sport_type: fix.targetType });
+  const walkNumber = await incrementWalkCount(kv);
+
+  const hour = new Date(activity.start_date_local).getHours();
+
+  const period = hour < 5  ? 'Night' :
+                hour < 12 ? 'Morning' :
+                hour < 14 ? 'Lunch' :
+                hour < 17 ? 'Afternoon' :
+                hour < 21 ? 'Evening' : 'Night';
+                
+  const newName = `${period} Walk #${walkNumber}`;
+
+  await updateActivity(token, activityId, {
+    sport_type: fix.targetType,
+    name: newName,
+    description: `Auto-typed by strava-fix · https://github.com/elt0nxale/strava-fix`,
+  });
 
   await appendLog(kv, {
     id: activityId,
-    name: activity.name,
+    name: newName,           // ← was: activity.name
     original_type: activity.sport_type,
     fixed_type: fix.targetType,
     speed_kmh: fix.kmh,
@@ -269,6 +295,31 @@ async function handleAuthCallback(request, env) {
   }
 }
 
+function loginPage(error = '') {
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <title>Strava Fix</title>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:#07090e;display:flex;align-items:center;justify-content:center;min-height:100vh;font-family:'IBM Plex Mono',monospace}
+    .box{border:1px solid #1c2135;padding:40px;width:320px}
+    .box::before{content:'';display:block;width:20px;height:20px;border-top:2px solid #3d8eff;border-left:2px solid #3d8eff;margin-bottom:24px}
+    label{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:#4a5270;display:block;margin-bottom:8px}
+    input{width:100%;background:#111522;border:1px solid #1c2135;color:#c8cedf;padding:9px 12px;font-family:inherit;font-size:12px;outline:none}
+    input:focus{border-color:#3d8eff}
+    button{margin-top:16px;width:100%;background:#3d8eff;color:#fff;border:none;padding:10px;font-family:inherit;font-size:11px;letter-spacing:.1em;text-transform:uppercase;cursor:pointer}
+    .err{color:#ff4d6a;font-size:11px;margin-top:12px}
+  </style></head>
+  <body><div class="box">
+    <label>Password</label>
+    <form method="POST" action="/login">
+      <input type="password" name="password" autofocus />
+      <button type="submit">Enter</button>
+    </form>
+    ${error ? `<p class="err">${error}</p>` : ''}
+  </div></body></html>`;
+}
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 export default {
@@ -276,6 +327,29 @@ export default {
     const url    = new URL(request.url);
     const path   = url.pathname;
     const method = request.method;
+
+    // ── Auth gate (all routes except webhook) ────────────────
+    if (path !== '/webhook' && path !== '/auth' && path !== '/auth/callback') {
+      const cookie = request.headers.get('cookie') ?? '';
+      const authed = cookie.includes(`sf_auth=${env.DASHBOARD_SECRET}`);
+
+      if (!authed) {
+        if (path === '/login' && method === 'POST') {
+          const form = await request.formData();
+          if (form.get('password') === env.DASHBOARD_SECRET) {
+            return new Response(null, {
+              status: 302,
+              headers: {
+                'Location': `${baseUrl(request)}/`,
+                'Set-Cookie': `sf_auth=${env.DASHBOARD_SECRET}; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000`,
+              },
+            });
+          }
+          return html(loginPage('Wrong password'));
+        }
+        return html(loginPage());
+      }
+    }
 
     // ── Webhook (must be unauthenticated) ─────────────────────────
     if (path === '/webhook') {
