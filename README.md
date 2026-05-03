@@ -1,59 +1,102 @@
-## About
+# strava-fix
 
-Ever gone for a leisurely walk only for Strava to insist you were "Running" at a suspiciously slow pace? This Cloudflare Worker automatically detects slow "Runs" and re-types them as "Walks" (or your preferred activity type) the moment they are uploaded.
-
----
-
-## How it Works
-
-The system sits between your activity source (like a Garmin watch) and your Strava profile. It uses Webhooks to listen for new activities and instantly corrects them based on your settings.
-
-![overview diagram components](image.png)
-
-### Logic
-By default, the worker checks every new **Run** against two criteria:
-1.  **Speed:** Is the average speed below **7.0 km/h**?
-2.  **Keywords:** Does the activity title contain the word **"walk"**?
-
-If either is true, the worker automatically updates the activity type on Strava.
+Cloudflare Worker that intercepts Strava webhook events and re-types slow "Run" activities as Walk or Hike in real time. Built for Garmin users whose watches push every activity as a run.
 
 ---
 
-## Features
+## How it works
 
-*   **Real-time Corrections:** Uses Strava Webhooks to fix activities seconds after they appear.
-*   **Web Dashboard:** A simple interface to manage settings, view logs, and connect/disconnect your account.
-*   **Smart Token Management:** Automatically handles OAuth refreshing so you never have to log in twice.
-*   **Customizable:** Adjustable speed thresholds and target activity types (e.g., change Runs to Hikes instead of Walks).
+![Overview Diagram](image-1.png)
+Tokens are stored in KV and refreshed automatically. The dashboard at `/` handles OAuth, settings, and a fix log.
 
 ---
 
-## Setup & Environment Variables
+## Stack
 
-To run this worker, you'll need a [Strava API Application](https://www.strava.com/settings/api) and the following secrets configured in your Cloudflare environment:
-
-| Secret | Description |
-| :--- | :--- |
-| `STRAVA_CLIENT_ID` | Your Strava App Client ID |
-| `STRAVA_CLIENT_SECRET` | Your Strava App Client Secret |
-| `AF_KV` | A Cloudflare KV Namespace bound to the worker |
-
----
-
-## Project Structure
-
-*   **`index.js`**: The core router and logic. It handles the webhooks, serves the dashboard, and manages the "Should I fix this?" decision-making.
-*   **`strava.js`**: The API wrapper. It contains all the heavy lifting for OAuth flows, fetching activity details, and communicating with Strava's servers.
-*   **`html.js`**: (Referenced) Contains the template for the web dashboard.
+| Layer | Tech |
+|---|---|
+| Runtime | Cloudflare Workers (free tier) |
+| Storage | Cloudflare KV — tokens, settings, log |
+| Auth | Strava OAuth 2.0 |
+| Secrets | `wrangler secret` — never in source |
 
 ---
 
-## Deployment
+## Secrets
 
-1.  Clone the repository.
-2.  Configure your `wrangler.toml` with your KV binding.
-3.  Deploy using Wrangler:
-    ```bash
-    wrangler deploy
-    ```
-4.  Visit your worker URL, connect your Strava account, and click **"Register Webhook"** in the dashboard.
+Set via `wrangler secret put`, never committed:
+
+```
+STRAVA_CLIENT_ID      — numeric app ID from strava.com/settings/api
+STRAVA_CLIENT_SECRET  — secret string from same page
+```
+
+KV namespace bound as `AF_KV` in `wrangler.toml`.
+
+---
+
+## Deploy
+
+```bash
+# 1. Create KV namespaces and paste IDs into wrangler.toml
+wrangler kv namespace create AF_KV
+wrangler kv namespace create AF_KV --preview
+
+# 2. Set secrets
+wrangler secret put STRAVA_CLIENT_ID
+wrangler secret put STRAVA_CLIENT_SECRET
+
+# 3. Deploy
+wrangler deploy
+
+# 4. Open dashboard → Connect Strava → Setup Webhook
+```
+
+Strava callback domain must match your worker URL in `strava.com/settings/api`.
+
+---
+
+## Files
+
+```
+src/
+  index.js   — router, webhook handler, fix logic, OAuth flow
+  strava.js  — Strava API client (tokens, activities, webhooks)
+  html.js    — dashboard UI
+wrangler.toml
+```
+
+---
+
+## Fix logic
+
+```js
+// Re-types if sport_type === 'Run' AND either:
+avg_speed * 3.6 < speed_threshold_kmh   // default 7.0
+|| activity.name.toLowerCase().includes('walk')  // if name-match enabled
+```
+
+Resulting name format: `Evening Walk #14` — time-of-day prefix + incremental counter seeded from KV.
+
+---
+
+## Dashboard
+
+| Route | Purpose |
+|---|---|
+| `GET /` | Dashboard |
+| `GET /auth` | Start Strava OAuth |
+| `GET /auth/callback` | OAuth callback |
+| `GET /webhook` | Strava webhook verification |
+| `POST /webhook` | Strava webhook event |
+| `POST /api/settings` | Save settings |
+| `POST /api/setup-webhook` | Register webhook with Strava |
+| `POST /api/disconnect` | Clear tokens |
+
+---
+
+## Notes
+
+- Single-user by design — one token set in KV, no session layer
+- `hide_from_home: true` removes fixed activities from follower feeds; full `only_me` privacy isn't available via the Strava API for device-uploaded activities
+- To seed the walk counter to a specific number: `wrangler kv key put --binding=AF_KV walk_count "N"`
