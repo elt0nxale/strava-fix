@@ -2,6 +2,12 @@
 
 Cloudflare Worker that intercepts Strava webhook events and re-types slow "Run" activities as Walk or Hike in real time. Built for Garmin users whose watches push every activity as a run.
 
+_Note: No longer working as it costs $10/mth for a subscription:_
+
+> Effective June 30, 2026
+
+> Subscription required for existing Standard Tier developers. A Strava subscription will be required to access the API as a Standard Tier developer. Extended Access Tier developers are not affected.
+
 ---
 
 ## How it works
